@@ -1,0 +1,112 @@
+---
+title: "Explore micromobility"
+output: html_notebook
+---
+
+```{r libs}
+library(tidyverse)
+library(lubridate)
+library(tidycensus)
+library(kableExtra)
+library(ggthemes)
+library(jsonlite)
+library(RSocrata)
+library(ggmap)
+```
+
+```{r data-import}
+# Shared micromobility data explorer
+# http://dockless.austintexas.io/
+
+# Shared micromobility dashboard
+# https://transportation.austintexas.io/micromobility-data/
+
+sql_import <- "?$where=Year>2020"
+
+df_2021 <- fromJSON(
+  # https://doi.org/10.26000/030.000003
+  paste0("https://data.austintexas.gov/resource/7d8e-dm7r.json", sql_import)
+  ) 
+```
+
+```{r acs}
+atx_tract <- tidycensus::get_acs(geography = "tract",
+                          variables = "B19013_001", # income ?
+                          state = "TX",
+                          county = "Travis",
+                          year = 2018,
+                          survey = "acs5",
+                          geometry = TRUE) %>% 
+  select(GEOID, geometry)
+
+# add geometry by GEOID
+df_2021 <- df_2021 %>% 
+  left_join(atx_tract, by = c("census_geoid_start"="GEOID")) %>% 
+  rename(census_geom_start = geometry) %>% 
+  left_join(atx_tract, by = c("census_geoid_end"="GEOID")) %>% 
+  rename(census_geom_end = geometry)
+```
+
+```{r}
+get_map_data <- function(data,
+                    start_date = "2021-01-18", 
+                    end_date = "2021-01-18",
+                    origin = TRUE,
+                    vehicle_type = 0) {
+  # 0 = all
+  # 1 = bicycle
+  # 2 = scooter
+    
+  data <- data %>%
+    filter(str_detect(start_time, start_date) & str_detect(end_time, end_date))
+
+  if (vehicle_type == 1) {
+    data <- data %>% filter(vehicle_type == "bicycle")
+  } else if (vehicle_type == 2) {
+    data <- data %>% filter(vehicle_type == "scooter")
+  } 
+  
+  if (origin == TRUE) {
+    data <- data %>% 
+      select(- census_geom_end) %>% 
+      count(census_geoid_start) %>% 
+      left_join(atx_tract, by = c("census_geoid_start"="GEOID")) 
+  } else {
+    data <- data %>% 
+      select(- census_geom_start) %>% 
+      count(census_geoid_end) %>% 
+      left_join(atx_tract, by = c("census_geoid_end"="GEOID")) 
+  }
+  
+  data <- data %>% rename(estimate = n)
+  
+  # make map
+  return(data)
+}
+
+
+df_2021_temp %>% count(census_geoid_start)
+
+```
+
+
+```{r map}
+atx_map <- ggmap(get_googlemap("austin", zoom = 13, maptype = "roadmap"), 
+                 ylab = "Latitude", 
+                 xlab = "Longitude") 
+
+m2 <- atx_map + 
+  geom_sf(data = st_as_sf(df_2021_temp), 
+                     mapping = aes(geometry = geometry, fill = estimate), 
+          alpha = 0.9,
+          inherit.aes = FALSE) 
+ 
+
+# df_2021 %>%
+#   ggplot(aes(fill = vehicle_type, geometry = census_geom_start)) +
+#   geom_sf() +
+#   # coord_sf(crs = "+proj=longlat +datum=WGS84", datum=NA) +
+# theme_minimal()
+```
+
+
